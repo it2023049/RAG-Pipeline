@@ -1,4 +1,4 @@
-"""Instructions for reporting conflicting evidence in the generated answer."""
+"""Instructions for describing conflicts in retrieved passages."""
 
 # This text is added to the system prompt in generation.py. It asks the LLM to
 # acknowledge contradictions in retrieved passages. It does not independently

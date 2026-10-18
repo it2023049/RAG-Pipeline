@@ -1,67 +1,134 @@
-import sys
+"""Command-line interface for indexing files and asking questions."""
+
+import argparse
 from pathlib import Path
 
+from citations import format_source
 from generation import generate_answer
-from index import build_index
-from ingest import load_and_split
+from loaders import SUPPORTED_SUFFIXES
 from retrieval import retrieve
+from vector_store import index_file, open_vector_store
 
 
-def main() -> int:
-    # PDF paths are supplied as command-line arguments after rag.py.
-    # Stop early if no input files were provided.
-    if len(sys.argv) < 2:
-        print("Usage: python rag.py file1.pdf [file2.pdf ...]")
-        return 1
+def parse_arguments() -> argparse.Namespace:
+    # Create two commands: one for indexing and one for questions
+    parser = argparse.ArgumentParser(
+        description="Local RAG with Ollama and Chroma"
+    )
+    commands = parser.add_subparsers(
+        dest="command",
+        required=True,
+    )
 
-    # Expand '~' in user-provided paths and check each path before ingestion.
-    pdf_paths = [Path(name).expanduser() for name in sys.argv[1:]]
-    for path in pdf_paths:
-        if not path.is_file() or path.suffix.lower() != ".pdf":
-            print(f"PDF not found: {path}")
+    indexing = commands.add_parser(
+        "index",
+        help="Add or update local files",
+    )
+    indexing.add_argument(
+        "files",
+        nargs="+",
+        type=Path,
+    )
+
+    asking = commands.add_parser(
+        "ask",
+        help="Ask one question or enter interactive mode",
+    )
+    asking.add_argument(
+        "question",
+        nargs="?",
+    )
+
+    return parser.parse_args()
+
+
+def run_index(files: list[Path]) -> int:
+    # Convert user-provided paths into absolute paths
+    paths = [
+        path.expanduser().resolve()
+        for path in files
+    ]
+
+    # Check every file before writing anything to Chroma
+    for path in paths:
+        if not path.is_file():
+            print(f"File not found: {path}")
             return 1
 
-    # Ingestion extracts PDF text, then splits it into passages. The index is
-    # built once, before the question loop, so repeated questions reuse it.
-    chunks = load_and_split(pdf_paths)
-    if not chunks:
-        print("No readable text was found in the PDFs.")
+        if path.suffix.lower() not in SUPPORTED_SUFFIXES:
+            print(f"Unsupported file type: {path}")
+            return 1
+
+    store = open_vector_store()
+
+    # Index each unique path only once
+    for path in dict.fromkeys(paths):
+        result = index_file(store, path)
+        print(
+            f"{path.name}: {result.status} "
+            f"({result.chunks} passages)"
+        )
+
+    return 0
+
+
+def print_answer(store, question: str) -> None:
+    # Find relevant passages before calling the chat model
+    documents = retrieve(store, question)
+
+    # Show the evidence that will be given to the model
+    print("\nRetrieved passages:")
+    for number, document in enumerate(documents, start=1):
+        print(f"[{number}] {format_source(document)}")
+
+        preview = document.page_content[:180].replace("\n", " ")
+        print(f"    {preview}...")
+
+    print("\nAnswer:")
+    print(generate_answer(question, documents))
+
+
+def run_ask(question: str | None) -> int:
+    store = open_vector_store()
+
+    # Questions need at least one previously indexed passage
+    if not store.get(limit=1)["ids"]:
+        print("The index is empty. Run: python rag.py index file.pdf")
         return 1
 
-    print(f"Loaded {len(chunks)} passages. Building the index...")
-    store = build_index(chunks)
+    # Answer once if the question was provided in the command
+    if question:
+        print_answer(store, question)
+        return 0
+
+    # Otherwise, continue reading questions from the terminal
     print("Ready. Type 'exit' to quit.")
 
-    # Keep accepting questions until the user types exit or closes the input.
     while True:
         try:
-            question = input("\nQuestion: ").strip()
+            user_question = input("\nQuestion: ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
 
-        # An empty line is ignored; no retrieval or model call is needed.
-        if question.lower() == "exit":
+        if user_question.lower() == "exit":
             break
-        if not question:
-            continue
 
-        # Retrieval selects the top passages for this question. Print a short
-        # preview so the user can inspect what evidence the model will receive.
-        documents = retrieve(store, question)
-        print("\nRetrieved passages:")
-        for number, doc in enumerate(documents, start=1):
-            print(f"[{number}] {Path(doc.metadata['source']).name}, page {doc.metadata['page']}")
-            print("   ", doc.page_content[:180].replace("\n", " "), "...")
+        if user_question:
+            print_answer(store, user_question)
 
-        # Generation receives only the selected passages, not the full PDFs.
-        print("\nAnswer:")
-        print(generate_answer(question, documents))
-
-    # A zero exit status means the program ended normally.
     return 0
 
 
+def main() -> int:
+    args = parse_arguments()
+
+    # Select the action requested by the user
+    if args.command == "index":
+        return run_index(args.files)
+
+    return run_ask(args.question)
+
+
 if __name__ == "__main__":
-    # Importing this module elsewhere should not start the interactive loop.
     raise SystemExit(main())

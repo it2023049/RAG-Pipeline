@@ -8,7 +8,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
 
 from config import CHAT_MODEL
-from conflicts import CONFLICT_INSTRUCTION
+from conflict_prompt import CONFLICT_INSTRUCTION
 
 
 def generate_answer(question: str, documents: list[Document]) -> str:
@@ -42,5 +42,6 @@ def generate_answer(question: str, documents: list[Document]) -> str:
     # The parser extracts plain text from the model's response.
     model = ChatOllama(model=CHAT_MODEL, temperature=0)
     chain = prompt | model | StrOutputParser()
-    # Fill the placeholders only after retrieval has selected the passages.
+    
+    # Fill the placeholders only after retrieval has selected the passages
     return chain.invoke({"question": question, "context": context})

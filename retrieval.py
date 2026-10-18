@@ -11,5 +11,6 @@ def retrieve(store: InMemoryVectorStore, question: str) -> list[Document]:
     # passages from many different PDFs. The store embeds the question using
     # the same embedding model that was used while building the index.
     retriever = store.as_retriever(search_kwargs={"k": TOP_K})
+    
     # The returned Documents carry their text and original PDF/page metadata
     return retriever.invoke(question)
